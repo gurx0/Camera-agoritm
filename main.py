@@ -17,9 +17,11 @@ class CameraAngleWorker(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.running = True
+        self.prev_angle = 0  # Предыдущее значение угла для фильтрации
+        self.alpha = 0.5  # Коэффициент сглаживания
 
     def run(self):
-        cap = cv2.VideoCapture(1)  # Подключение к камере
+        cap = cv2.VideoCapture(0)  # Подключение к камере
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -27,7 +29,11 @@ class CameraAngleWorker(QThread):
 
             # Вычисление угла и получение изображения границ
             angle, edges, lines = self.calculate_angle_and_edges(frame)
-            self.angle_changed.emit(angle)  # Передача значения угла в интерфейс
+            # Применение экспоненциального сглаживания
+            smoothed_angle = self.alpha * angle + (1 - self.alpha) * self.prev_angle
+            self.prev_angle = smoothed_angle
+
+            self.angle_changed.emit(smoothed_angle)  # Передача сглаженного значения угла в интерфейс
 
             # Отображение линий на исходном кадре
             self.draw_lines(frame, lines)  # Добавление линий на исходное изображение
@@ -40,8 +46,10 @@ class CameraAngleWorker(QThread):
 
     def calculate_angle_and_edges(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=80, maxLineGap=20)
+        blurred = cv2.GaussianBlur(gray, (13, 13), 0)  # Применение размытия для уменьшения шума
+        edges = cv2.Canny(blurred, 50, 150, apertureSize=3)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=100,
+                                maxLineGap=30)  # Увеличены значения
 
         if lines is not None:
             angles = []
@@ -77,7 +85,7 @@ class RealTimePlot(QtWidgets.QMainWindow):
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
 
-        # Вертикальный компоновщик
+        # Горизонтальный компоновщик
         layout = QtWidgets.QVBoxLayout(central_widget)
 
         # Инициализация графика
@@ -90,13 +98,17 @@ class RealTimePlot(QtWidgets.QMainWindow):
         self.curve = self.plot_widget.plot(pen='b')  # Линия графика
         self.plot_widget.addLine(y=0, pen='r')  # Красная линия на уровне нуля
 
+        # Горизонтальный компоновщик для видео
+        video_layout = QtWidgets.QHBoxLayout()
+        layout.addLayout(video_layout)  # Добавляем горизонтальный компоновщик в основной вертикальный
+
         # QLabel для отображения видео
         self.video_label = QtWidgets.QLabel()
-        layout.addWidget(self.video_label)
+        video_layout.addWidget(self.video_label)  # Добавляем обычное видео
 
         # QLabel для отображения границ
         self.edges_label = QtWidgets.QLabel()
-        layout.addWidget(self.edges_label)
+        video_layout.addWidget(self.edges_label)  # Добавляем контурное видео справа
 
         # Запуск потока для получения углов
         self.worker = CameraAngleWorker()
@@ -122,6 +134,13 @@ class RealTimePlot(QtWidgets.QMainWindow):
             self.x_data.pop(0)
             self.y_data.pop(0)
 
+        # Обновляем оси Y
+        self.plot_widget.setYRange(-180, 180)  # Устанавливаем пределы оси Y
+
+        # Динамическое обновление оси X
+        if len(self.x_data) > 0:
+            self.plot_widget.setXRange(self.x_data[0],
+                                       self.x_data[-1])  # Устанавливаем пределы оси X от первого до последнего значения
         self.curve.setData(self.x_data, self.y_data)  # Обновляем данные графика
 
     def update_frame(self, frame):
