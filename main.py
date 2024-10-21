@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 
-# Захват видео с камеры (если камера по умолчанию, то 0)
+# Захват видео с камеры
 cap = cv2.VideoCapture(0)
 
-# Определение параметров для функции ShiTomasi
+# Параметры для функции ShiTomasi для поиска хороших углов
 feature_params = dict(maxCorners=100, qualityLevel=0.3, minDistance=7, blockSize=7)
 
 # Параметры для оптического потока Лукаса-Канаде
@@ -26,6 +26,11 @@ mask = np.zeros_like(prev_frame)
 threshold = 2.0
 fixed_length = 50  # Длина вектора, когда движение фиксируется
 
+# Параметры для сглаживания
+alpha = 0.1  # Коэффициент сглаживания для EMA
+smooth_dx, smooth_dy = 0, 0  # Начальные значения сглаженных компонент вектора
+smooth_angle = 0  # Начальное значение сглаженного угла
+
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -41,6 +46,12 @@ while True:
     good_new = next_points[status == 1]
     good_old = prev_points[status == 1]
 
+    # Если количество точек стало меньше 10, заново инициализируем точки
+    if len(good_new) < 10:
+        good_new = cv2.goodFeaturesToTrack(frame_gray, mask=None, **feature_params)
+        prev_points = good_new
+        mask = np.zeros_like(frame)  # Очистим маску для рисования
+
     # Инициализируем переменные для накопления смещений
     total_dx, total_dy = 0, 0
     count = len(good_new)
@@ -49,7 +60,6 @@ while True:
         a, b = new.ravel()  # Преобразуем в одномерный массив
         c, d = old.ravel()  # Преобразуем в одномерный массив
 
-        # Проверяем, что значения существуют и являются целыми числами
         if a is not None and b is not None and c is not None and d is not None:
             a, b = int(a), int(b)
             c, d = int(c), int(d)
@@ -67,8 +77,12 @@ while True:
         avg_dx = total_dx / count
         avg_dy = total_dy / count
 
+        # Сглаживание значений с использованием экспоненциального скользящего среднего (EMA)
+        smooth_dx = alpha * avg_dx + (1 - alpha) * smooth_dx
+        smooth_dy = alpha * avg_dy + (1 - alpha) * smooth_dy
+
         # Рассчитываем величину смещения
-        motion_magnitude = np.sqrt(avg_dx ** 2 + avg_dy ** 2)
+        motion_magnitude = np.sqrt(smooth_dx ** 2 + smooth_dy ** 2)
 
         # Определяем центр изображения для отображения вектора
         h, w, _ = frame.shape
@@ -76,14 +90,24 @@ while True:
 
         if motion_magnitude > threshold:
             # Если есть движение, нормализуем вектор до постоянной длины
-            norm_dx = (avg_dx / motion_magnitude) * fixed_length
-            norm_dy = (avg_dy / motion_magnitude) * fixed_length
+            norm_dx = (smooth_dx / motion_magnitude) * fixed_length
+            norm_dy = (smooth_dy / motion_magnitude) * fixed_length
 
             # Конечная точка для вектора движения
             end_point = (int(center[0] + norm_dx), int(center[1] + norm_dy))
 
             # Рисуем вектор движения (стрелку)
-            frame = cv2.arrowedLine(frame, center, end_point, (0, 255, 0), 3, tipLength=0.5)  # Зелёная стрелка
+            frame = cv2.arrowedLine(frame, center, end_point, (0, 0, 0), 3, tipLength=0.5)  # Зелёная стрелка
+
+            # Рассчитываем угол отклонения вектора относительно вертикальной оси (оси Y)
+            angle = np.degrees(np.arctan2(norm_dx, norm_dy))
+
+            # Сглаживание угла
+            smooth_angle = alpha * angle + (1 - alpha) * smooth_angle
+
+            # Выводим угол на изображение
+            angle_text = f"Angle: {smooth_angle:.2f} degrees"
+            cv2.putText(frame, angle_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
         else:
             # Если движения нет, не рисуем вектор
             pass
