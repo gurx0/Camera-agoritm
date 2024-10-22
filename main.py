@@ -29,7 +29,6 @@ fixed_length = 50  # Длина вектора, когда движение фи
 # Параметры для сглаживания
 alpha = 0.1  # Коэффициент сглаживания для EMA
 smooth_dx, smooth_dy = 0, 0  # Начальные значения сглаженных компонент вектора
-smooth_yaw = 0  # Инициализация сглаженного угла yaw
 smooth_angle = 0  # Начальное значение сглаженного угла
 
 while True:
@@ -82,43 +81,36 @@ while True:
         smooth_dx = alpha * avg_dx + (1 - alpha) * smooth_dx
         smooth_dy = alpha * avg_dy + (1 - alpha) * smooth_dy
 
-        # Определяем центр изображения
+        # Рассчитываем величину смещения
+        motion_magnitude = np.sqrt(smooth_dx ** 2 + smooth_dy ** 2)
+
+        # Определяем центр изображения для отображения вектора
         h, w, _ = frame.shape
-        center_x, center_y = w // 2, h // 2
+        center = (w // 2, h // 2)
 
-        # Инициализация переменных для расчета угла поворота
-        delta_x = 0
-        delta_y = 0
+        if motion_magnitude > threshold:
+            # Если есть движение, нормализуем вектор до постоянной длины
+            norm_dx = (smooth_dx / motion_magnitude) * fixed_length
+            norm_dy = (smooth_dy / motion_magnitude) * fixed_length
 
-        for i, (new, old) in enumerate(zip(good_new, good_old)):
-            a, b = new.ravel()  # Новая позиция
-            c, d = old.ravel()  # Старая позиция
+            # Конечная точка для вектора движения
+            end_point = (int(center[0] + norm_dx), int(center[1] + norm_dy))
 
-            # Вычисляем смещение относительно центра
-            delta_x += (a - center_x) - (c - center_x)
-            delta_y += (b - center_y) - (d - center_y)
+            # Рисуем вектор движения (стрелку)
+            frame = cv2.arrowedLine(frame, center, end_point, (0, 0, 0), 3, tipLength=0.5)  # Зелёная стрелка
 
-        # Рассчитываем угол поворота
-        if delta_x != 0 or delta_y != 0:  # Убедитесь, что вектор не нулевой
-            rotation_angle = np.degrees(np.arctan2(delta_y, delta_x))
+            # Рассчитываем угол отклонения вектора относительно вертикальной оси (оси Y)
+            angle = np.degrees(np.arctan2(norm_dx, norm_dy))
+
+            # Сглаживание угла
+            smooth_angle = alpha * angle + (1 - alpha) * smooth_angle
+
+            # Выводим угол на изображение
+            angle_text = f"Angle: {smooth_angle:.2f} degrees"
+            cv2.putText(frame, angle_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
         else:
-            rotation_angle = 0  # Если нет движения, угол равен 0
-
-        # Выводим угол на изображение
-        rotation_text = f"Rotation Angle: {rotation_angle:.2f} degrees"
-        cv2.putText(frame, rotation_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-
-        # Далее рассчитайте yaw
-        yaw = np.degrees(np.arctan2(smooth_dy, smooth_dx))
-        smooth_yaw = alpha * yaw + (1 - alpha) * smooth_yaw
-
-        # Проверяем направление yaw для изменения коэффициента сглаживания
-        if abs(yaw) < 10 or abs(yaw) > 170:  # Если yaw почти параллелен одной из осей
-            alpha_yaw = 0.05  # Увеличиваем сглаживание
-        else:
-            alpha_yaw = 0.1  # Обычное сглаживание
-
-        smooth_yaw = alpha_yaw * yaw + (1 - alpha_yaw) * smooth_yaw
+            # Если движения нет, не рисуем вектор
+            pass
 
     # Наложение маски с линиями на текущее видео
     img = cv2.add(frame, mask)
